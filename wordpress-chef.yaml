@@ -1,0 +1,125 @@
+imports:
+    - http://getcloudify.org/spec/chef-plugin/1.0/plugin.yaml
+plugins:  
+    cloudstack_plugin:
+        derived_from: cloudify.plugins.manager_plugin
+        properties:
+            url: https://github.com/boul/cloudify-cloudstack-plugin/archive/develop.zip    
+types:
+    cloudstack_network:
+        derived_from: cloudify.types.network
+        properties:
+            - auth:
+                    API_KEY: ''
+                    API_SECRET_KEY: ''
+                    API_URL: 'https://cloud/client/api'
+            - network:
+                    service_offering: SourceNatNiciraNvpNetwork
+                    zone: 'BETA-SBP-DC-1'
+            - rules: []
+            
+        interfaces:
+            cloudify.interfaces.lifecycle:
+                - create: cloudstack_plugin.network.create
+                - delete: cloudstack_plugin.network.delete
+
+    cloudstack_vm:
+        derived_from: cloudify.types.host     
+        properties:
+            -   auth:
+                    API_KEY: ''
+                    API_SECRET_KEY: ''
+                    API_URL: 'https://cloud/client/api'
+               
+            -   install_agent: true            
+            -   cloudify_agent:
+                    user: root
+                    port: 22
+                    # example for ssh key file (see `key_name` below) 
+                    # this file matches the agent key configured during the bootstrap
+                    key: /root/.ssh/cloudify-agents-kp.pem
+                # Uncomment and update `management_network_name` when working a n neutron enabled openstack
+                # management_network_name: cloudify-admin-network
+            -   server:
+
+                ### if defined, will serve as the hostname for the started instance,
+                ### otherwise, the node_id will be used
+                 #name: no_name            ### HOST_NAME""
+                    image_id: dca719c1-05e2-4cc2-8592-220f12baa999
+                    #image_id: 5915341e-2f68-4c9e-a961-6b1809bc227b
+                    size: employee-medium-ha
+                    keypair_name: cloudify-agents-kp
+                    networks: []
+                    ip_address:
+        interfaces:
+            cloudify.interfaces.lifecycle:
+                -   delete: cloudstack_plugin.virtual_machine_in_network.delete
+                -   start: cloudstack_plugin.virtual_machine_in_network.start
+                -   stop: cloudstack_plugin.virtual_machine_in_network.stop
+            cloudify.interfaces.host:
+                -   get_state: cloudstack_plugin.virtual_machine_in_network.get_state
+
+
+
+blueprint:
+  name: wordpress
+  nodes:
+    
+  - name: wordpress_network
+    type: cloudstack_network
+    properties:
+      network:
+        name: wordpress_network
+        service_offering: SourceNatNiciraNvpNetwork
+        zone: 'BETA-SBP-DC-1'
+
+      rules:
+              - cidr: 0.0.0.0/0
+                start_port: 8080
+              - cidr: 0.0.0.0/0
+                start_port: 27017
+              - cidr: 0.0.0.0/0
+                start_port: 28017
+
+  - name: wordpress_vm
+    type: cloudstack_vm
+    instances:
+        deploy: 1
+    relationships:
+      - target: wordpress_network
+        type: cloudify.relationships.contained_in
+    properties:
+        server:
+            image_id: dca719c1-05e2-4cc2-8592-220f12baa999
+            size: employee-medium-ha
+            keypair_name: cloudify-agents-kp
+            networks: ['wordpress_network']
+            ip_address: 10.1.1.128
+
+  - name: wordpress
+    type: cloudify.types.chef.web_server
+    properties:
+        chef_config:
+            version: 11.14.6-1
+
+            # ALT 1: server
+            chef_server_url: https://chef/organizations/paas
+            validation_client_name: paas-validator
+            validation_key: "-----BEGIN RSA PRIVATE KEY-----\n\\n-----END RSA PRIVATE KEY-----\n"
+            node_name_prefix: cloudify-
+            node_name_suffix: .cloud.local
+
+            ### # ALT 2: solo
+            ### cookbooks: http://10.20.30.41:50000/cookbooks.tar.gz
+
+            environment: _default
+            attributes:
+                test_attr_1: test_val_1
+                create_file:
+                    file_name: /tmp/blueprint.txt
+                    file_contents: Great success!
+            runlists:
+                create:    recipe[wordpress]
+    relationships:
+        - type: cloudify.relationships.contained_in
+          target: wordpress_vm
